@@ -18,12 +18,28 @@ def autopad(k, p=None):  # kernel, padding
         p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
     return p
 
-
+# 深度分离(DepthWise)卷积层，是GCONV的极端情况，分组数量等于输入通道数量，即每个通道作为一个小组分别进行卷积，结果联结作为输出，Cin = Cout = g，没有bias项。
+# k=1是卷积核kenel，s=1是步长stride，math.gcd() 返回的是最大公约数。
 def DWConv(c1, c2, k=1, s=1, act=True):
     # Depthwise convolution
     return Conv(c1, c2, k, s, g=math.gcd(c1, c2), act=act)
 
-
+"""
+g=1表示从输入通道到输出通道的阻塞连接数为1。
+autopad(k, p)此处换成自动填充。
+标准卷积层包括conv+BN+Leaky relu
+典型应用是yolo系列: DarknetConv2D_BN_Leaky(DBL)
+nn.Conv2d函数基本参数是：
+nn.Conv2d(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros')
+参数：
+in_channel:输入数据的通道数，例RGB图片通道数为3。
+out_channel: 输出数据的通道数，这个根据模型调整。
+kennel_size: 卷积核大小，可以是int，或tuple；kennel_size=2,意味着卷积大小(2,2)，kennel_size=（2,3），意味着卷积大小（2，3）即非正方形卷积。
+stride：步长，默认为1，与kennel_size类似，stride=2,意味着步长上下左右扫描皆为2，stride=（2,3），左右扫描步长为2，上下为3。
+padding：零填充。
+groups：从输入通道到输出通道的阻塞连接数。
+bias：如果为“True“，则向输出添加可学习的偏置。
+"""
 class Conv(nn.Module):
     # Standard convolution
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
@@ -32,6 +48,7 @@ class Conv(nn.Module):
         self.bn = nn.BatchNorm2d(c2)
         self.act = nn.Hardswish() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
+    # 前向计算
     def forward(self, x):
         return self.act(self.bn(self.conv(x)))
 
@@ -51,7 +68,7 @@ class Bottleneck(nn.Module):
     def forward(self, x):
         return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
 
-
+#这部分是几个标准Bottleneck的堆叠+几个标准卷积层
 class BottleneckCSP(nn.Module):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
@@ -86,6 +103,9 @@ class C3(nn.Module):
         return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), dim=1))
 
 
+
+# torch.cat() 是将两个tensor横着拼接在一起
+
 class SPP(nn.Module):
     # Spatial pyramid pooling layer used in YOLOv3-SPP
     def __init__(self, c1, c2, k=(5, 9, 13)):
@@ -99,9 +119,9 @@ class SPP(nn.Module):
         x = self.cv1(x)
         return self.cv2(torch.cat([x] + [m(x) for m in self.m], 1))
 
-
+# Focus模式的下采样，其最大好处是可以最大程度的减少信息损失；简单来说就是把数据切分为4份，每份数据都是相当于2倍下采样得到的，然后在channel维度进行拼接，最后进行卷积操作。
 class Focus(nn.Module):
-    # Focus wh information into c-space
+    # Focus wh information into c-space   把宽度w和高度h的信息整合到c空间中
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
         super(Focus, self).__init__()
         self.conv = Conv(c1 * 4, c2, k, s, p, g, act)
@@ -109,7 +129,7 @@ class Focus(nn.Module):
     def forward(self, x):  # x(b,c,w,h) -> y(b,4c,w/2,h/2)
         return self.conv(torch.cat([x[..., ::2, ::2], x[..., 1::2, ::2], x[..., ::2, 1::2], x[..., 1::2, 1::2]], 1))
 
-
+# 拼接函数，将两个tensor进行拼接起来
 class Concat(nn.Module):
     # Concatenate a list of tensors along dimension
     def __init__(self, dimension=1):
@@ -253,6 +273,7 @@ class Detections:
         return x
 
 
+# 在全局平均池化以后使用，去掉2个维度. x.size(0)是batch的大小
 class Flatten(nn.Module):
     # Use after nn.AdaptiveAvgPool2d(1) to remove last 2 dimensions
     @staticmethod

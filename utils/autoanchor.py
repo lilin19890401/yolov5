@@ -17,7 +17,7 @@ def check_anchor_order(m):
         m.anchors[:] = m.anchors.flip(0)
         m.anchor_grid[:] = m.anchor_grid.flip(0)
 
-
+# 自动计算最佳anchor
 def check_anchors(dataset, model, thr=4.0, imgsz=640):
     # Check anchor fit to data, recompute if necessary
     print('\nAnalyzing anchors... ', end='')

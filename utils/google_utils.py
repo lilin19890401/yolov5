@@ -68,7 +68,7 @@ def gdrive_download(id='1uH2BylpFxHKEGXKL6wJJlsgMU2YEjxuc', name='tmp.zip'):
         s = 'curl -Lb ./cookie "drive.google.com/uc?export=download&confirm=%s&id=%s" -o %s' % (get_token(), id, name)
     else:  # small file
         s = 'curl -s -L -o %s "drive.google.com/uc?export=download&id=%s"' % (name, id)
-    r = os.system(s)  # execute, capture return
+    r = os.system(s)  # execute, capture return values
     os.remove('cookie') if os.path.exists('cookie') else None
 
     # Error check

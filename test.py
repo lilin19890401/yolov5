@@ -18,7 +18,23 @@ from utils.metrics import ap_per_class, ConfusionMatrix
 from utils.plots import plot_images, output_to_target, plot_study_txt
 from utils.torch_utils import select_device, time_synchronized
 
-
+"""
+        param data:
+        param weights:       外部单独测试时读入的模型权重文件
+        param batch_size:    前向传播时的批次, 默认16
+        param imgsz:         输入图片分辨率大小, 默认640
+        param conf_thres:    筛选框的时候的置信度阈值, 默认0.001
+        param iou_thres:     进行NMS的时候的IOU阈值, 默认0.6
+        param save_json:     是否按照coco的json格式保存预测框，并且使用cocoapi做评估(需要同样coco的json格式的标签), 默认False
+        param single_cls:    数据集是否只有一个类别，默认False
+        param augment:       测试时是否使用TTA(test time augmentation), 默认False
+        param verbose:       是否打印出每个类别的mAP, 默认False
+        param model:         测试的模型，训练时调用test传入
+        param dataloader:    测试集的dataloader，训练时调用test传入
+        param save_dir:      保存在测试时第一个batch的图片上画出标签框和预测框的图片路径
+        param merge:         在进行NMS时，是否通过合并方式获得预测框, 默认False
+        param save_txt:      是否以txt文件的形式保存模型预测的框坐标, 默认False
+    """
 def test(data,
          weights=None,
          batch_size=32,
@@ -39,6 +55,7 @@ def test(data,
          log_imgs=0):  # number of logged images
 
     # Initialize/load model and set device
+    # 判断是否在训练时调用test，如果是则获取训练时的设备
     training = model is not None
     if training:  # called by train.py
         device = next(model.parameters()).device  # get model device
@@ -53,6 +70,7 @@ def test(data,
 
         # Load model
         model = attempt_load(weights, map_location=device)  # load FP32 model
+        # 检查输入图片分辨率是否能被模型的最大步长（默认32）整除
         imgsz = check_img_size(imgsz, s=model.stride.max())  # check img_size
 
         # Multi-GPU disabled, incompatible with .half() https://github.com/ultralytics/yolov5/issues/99
@@ -60,18 +78,22 @@ def test(data,
         #     model = nn.DataParallel(model)
 
     # Half
+    # 如果设备不是cpu并且gpu数目为1，则将模型由Float32转为Float16，提高前向传播的速度
     half = device.type != 'cpu'  # half precision only supported on CUDA
     if half:
-        model.half()
+        model.half()    # to FP16
 
     # Configure
+    # 加载数据配置信息
     model.eval()
     is_coco = data.endswith('coco.yaml')  # is COCO dataset
     with open(data) as f:
         data = yaml.load(f, Loader=yaml.FullLoader)  # model dict
     check_dataset(data)  # check
     nc = 1 if single_cls else int(data['nc'])  # number of classes
+    # 设置iou阈值，从0.5~0.95，每间隔0.05取一次
     iouv = torch.linspace(0.5, 0.95, 10).to(device)  # iou vector for mAP@0.5:0.95
+    # iou个数
     niou = iouv.numel()
 
     # Logging
@@ -83,21 +105,39 @@ def test(data,
 
     # Dataloader
     if not training:
+        # 创建一个全0数组测试一下前向传播是否正常运行
         img = torch.zeros((1, 3, imgsz, imgsz), device=device)  # init img
         _ = model(img.half() if half else img) if device.type != 'cpu' else None  # run once
+        # 获取图片路径
         path = data['test'] if opt.task == 'test' else data['val']  # path to val/test images
+
+        # 创建dataloader
+        # 注意这里rect参数为True，yolov5的测试评估是基于矩形推理的
         dataloader = create_dataloader(path, imgsz, batch_size, model.stride.max(), opt, pad=0.5, rect=True)[0]
 
     seen = 0
     confusion_matrix = ConfusionMatrix(nc=nc)
+    # 获取类别的名字
     names = {k: v for k, v in enumerate(model.names if hasattr(model, 'names') else model.module.names)}
+    """
+    获取coco数据集的类别索引
+    这里要说明一下，coco数据集有80个类别(索引范围应该为0~79)，
+    但是他的索引却属于0~90(笔者是通过查看coco数据测试集的json文件发现的，具体原因不知)
+    coco80_to_coco91_class()就是为了与上述索引对应起来，返回一个范围在0~90的索引数组
+    """
     coco91class = coco80_to_coco91_class()
+    # 设置tqdm进度条的显示信息
     s = ('%20s' + '%12s' * 6) % ('Class', 'Images', 'Targets', 'P', 'R', 'mAP@.5', 'mAP@.5:.95')
+    # 初始化指标，时间
     p, r, f1, mp, mr, map50, map, t0, t1 = 0., 0., 0., 0., 0., 0., 0., 0., 0.
+    # 初始化测试集的损失
     loss = torch.zeros(3, device=device)
+    # 初始化json文件的字典，统计信息，ap
     jdict, stats, ap, ap_class, wandb_images = [], [], [], [], []
+
     for batch_i, (img, targets, paths, shapes) in enumerate(tqdm(dataloader, desc=s)):
         img = img.to(device, non_blocking=True)
+        # 图片也由Float32->Float16
         img = img.half() if half else img.float()  # uint8 to fp16/32
         img /= 255.0  # 0 - 255 to 0.0 - 1.0
         targets = targets.to(device)
@@ -105,11 +145,18 @@ def test(data,
 
         with torch.no_grad():
             # Run model
+            """
+                time_synchronized()函数里面进行了torch.cuda.synchronize()，再返回的time.time()
+                torch.cuda.synchronize()等待gpu上完成所有的工作
+                总的来说就是这样测试时间会更准确 
+            """
             t = time_synchronized()
+            # inf_out为预测结果, train_out训练结果
             inf_out, train_out = model(img, augment=augment)  # inference and training outputs
             t0 += time_synchronized() - t
 
             # Compute loss
+            # 如果是在训练时进行的test，则通过训练结果计算并返回测试集的GIoU, obj, cls损失
             if training:
                 loss += compute_loss([x.float() for x in train_out], targets, model)[1][:3]  # box, obj, cls
 
@@ -117,17 +164,27 @@ def test(data,
             targets[:, 2:] *= torch.Tensor([width, height, width, height]).to(device)  # to pixels
             lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
             t = time_synchronized()
+            """
+                non_max_suppression进行非极大值抑制;
+                conf_thres为置信度阈值，iou_thres为iou阈值
+                merge为是否合并框
+            """
             output = non_max_suppression(inf_out, conf_thres=conf_thres, iou_thres=iou_thres, labels=lb)
             t1 += time_synchronized() - t
 
         # Statistics per image
+        # 为每一张图片做统计, 写入预测信息到txt文件, 生成json文件字典, 统计tp等
         for si, pred in enumerate(output):
+            # 获取第si张图片的标签信息, 包括class,x,y,w,h
+            # targets[:, 0]为标签属于哪一张图片的编号
             labels = targets[targets[:, 0] == si, 1:]
             nl = len(labels)
+            # 获取标签类别
             tcls = labels[:, 0].tolist() if nl else []  # target class
             path = Path(paths[si])
+            # 统计测试图片数量
             seen += 1
-
+            # 如果预测为空，则添加空的信息到stats里
             if len(pred) == 0:
                 if nl:
                     stats.append((torch.zeros(0, niou, dtype=torch.bool), torch.Tensor(), torch.Tensor(), tcls))
@@ -138,9 +195,12 @@ def test(data,
             scale_coords(img[si].shape[1:], predn[:, :4], shapes[si][0], shapes[si][1])  # native-space pred
 
             # Append to text file
+            # 保存预测结果为txt文件
             if save_txt:
+                # 获得对应图片的长和宽
                 gn = torch.tensor(shapes[si][0])[[1, 0, 1, 0]]  # normalization gain whwh
                 for *xyxy, conf, cls in predn.tolist():
+                    # xyxy格式->xywh, 并对坐标进行归一化处理
                     xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                     line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
                     with open(save_dir / 'labels' / (path.stem + '.txt'), 'a') as f:
@@ -169,54 +229,80 @@ def test(data,
                                   'score': round(p[4], 5)})
 
             # Assign all predictions as incorrect
+            # 初始化预测评定，niou为iou阈值的个数
             correct = torch.zeros(pred.shape[0], niou, dtype=torch.bool, device=device)
             if nl:
+                # detected用来存放已检测到的目标
                 detected = []  # target indices
                 tcls_tensor = labels[:, 0]
 
                 # target boxes
+				# 获得xyxy格式的框并乘以wh
                 tbox = xywh2xyxy(labels[:, 1:5])
+                # 将预测框的坐标调整到基于其原本长宽的坐标
                 scale_coords(img[si].shape[1:], tbox, shapes[si][0], shapes[si][1])  # native-space labels
                 if plots:
                     confusion_matrix.process_batch(pred, torch.cat((labels[:, 0:1], tbox), 1))
 
                 # Per target class
+                # 对图片中的每个类单独处理
                 for cls in torch.unique(tcls_tensor):
+                    # 标签框该类别的索引
                     ti = (cls == tcls_tensor).nonzero(as_tuple=False).view(-1)  # prediction indices
+                    # 预测框该类别的索引
                     pi = (cls == pred[:, 5]).nonzero(as_tuple=False).view(-1)  # target indices
 
                     # Search for detections
                     if pi.shape[0]:
-                        # Prediction to target ious
+                        """
+                        Prediction to target ious
+                            box_iou计算预测框与标签框的iou值，max(1)选出最大的ious值,i为对应的索引
+                            pred shape[N, 4]
+                            tbox shape[M, 4]
+                            box_iou shape[N, M]
+                            ious shape[N, 1]
+                            i shape[N, 1], i里的值属于0~M
+                        """
                         ious, i = box_iou(predn[pi, :4], tbox[ti]).max(1)  # best ious, indices
+
 
                         # Append detections
                         detected_set = set()
                         for j in (ious > iouv[0]).nonzero(as_tuple=False):
+                            # 获得检测到的目标
                             d = ti[i[j]]  # detected target
                             if d.item() not in detected_set:
                                 detected_set.add(d.item())
                                 detected.append(d)
+                                # iouv为以0.05为步长 0.5到0.95的序列
+                                # 获得不同iou阈值下的true positive
                                 correct[pi[j]] = ious[j] > iouv  # iou_thres is 1xn
                                 if len(detected) == nl:  # all targets already located in image
                                     break
 
             # Append statistics (correct, conf, pcls, tcls)
+            # 每张图片的结果统计到stats里
             stats.append((correct.cpu(), pred[:, 4].cpu(), pred[:, 5].cpu(), tcls))
 
         # Plot images
+        # 画出第1个batch的图片的ground truth和预测框并保存
         if plots and batch_i < 3:
             f = save_dir / f'test_batch{batch_i}_labels.jpg'  # labels
             Thread(target=plot_images, args=(img, targets, paths, f, names), daemon=True).start()
             f = save_dir / f'test_batch{batch_i}_pred.jpg'  # predictions
             Thread(target=plot_images, args=(img, output_to_target(output), paths, f, names), daemon=True).start()
 
+
     # Compute statistics
+    # 将stats列表的信息拼接到一起
     stats = [np.concatenate(x, 0) for x in zip(*stats)]  # to numpy
     if len(stats) and stats[0].any():
+        # 根据上面得到的tp等信息计算指标
+        # 精准度TP/TP+FP，召回率TP/P，map，f1分数，类别
         p, r, ap, f1, ap_class = ap_per_class(*stats, plot=plots, save_dir=save_dir, names=names)
         p, r, ap50, ap = p[:, 0], r[:, 0], ap[:, 0], ap.mean(1)  # [P, R, AP@0.5, AP@0.5:0.95]
         mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
+        # nt是一个列表，测试集每个类别有多少个标签框
         nt = np.bincount(stats[3].astype(np.int64), minlength=nc)  # number of targets per class
     else:
         nt = torch.zeros(1)
@@ -243,6 +329,8 @@ def test(data,
             wandb.log({"Validation": [wandb.Image(str(f), caption=f.name) for f in sorted(save_dir.glob('test*.jpg'))]})
 
     # Save JSON
+    # 采用之前保存的json格式预测结果，通过cocoapi评估指标
+    # 需要注意的是 测试集的标签也需要转成coco的json格式
     if save_json and len(jdict):
         w = Path(weights[0] if isinstance(weights, list) else weights).stem if weights is not None else ''  # weights
         anno_json = '../coco/annotations/instances_val2017.json'  # annotations json
@@ -279,6 +367,23 @@ def test(data,
 
 
 if __name__ == '__main__':
+    """
+        opt参数详解
+        weights:测试的模型权重文件
+        data:数据集配置文件，数据集路径，类名等
+        batch-size:前向传播时的批次, 默认32
+        img-size:输入图片分辨率大小, 默认640
+        conf-thres:筛选框的时候的置信度阈值, 默认0.001
+        iou-thres:进行NMS的时候的IOU阈值, 默认0.65
+        save-json:是否按照coco的json格式保存预测框，并且使用cocoapi做评估(需要同样coco的json格式的标签), 默认False
+        task:设置测试形式, 默认val, 具体可看下面代码解析注释
+        device:测试的设备，cpu；0(表示一个gpu设备cuda:0)；0,1,2,3(多个gpu设备)
+        single-cls:数据集是否只有一个类别，默认False
+        augment:测试时是否使用TTA(test time augmentation), 默认False
+        merge:在进行NMS时，是否通过合并方式获得预测框, 默认False
+        verbose:是否打印出每个类别的mAP, 默认False
+        save-txt:是否以txt文件的形式保存模型预测的框坐标, 默认False
+    """
     parser = argparse.ArgumentParser(prog='test.py')
     parser.add_argument('--weights', nargs='+', type=str, default='yolov5s.pt', help='model.pt path(s)')
     parser.add_argument('--data', type=str, default='data/coco128.yaml', help='*.data path')
@@ -303,6 +408,7 @@ if __name__ == '__main__':
     opt.data = check_file(opt.data)  # check file
     print(opt)
 
+    # task = ['val', 'test']时就正常测试验证集、测试集
     if opt.task in ['val', 'test']:  # run normally
         test(opt.data,
              opt.weights,
@@ -319,6 +425,7 @@ if __name__ == '__main__':
              save_conf=opt.save_conf,
              )
 
+    # task == 'study'时，就评估yolov5系列和yolov3-spp各个模型在各个尺度下的指标并可视化
     elif opt.task == 'study':  # run over a range of settings and save/plot
         for weights in ['yolov5s.pt', 'yolov5m.pt', 'yolov5l.pt', 'yolov5x.pt']:
             f = 'study_%s_%s.txt' % (Path(opt.data).stem, Path(weights).stem)  # filename to save to

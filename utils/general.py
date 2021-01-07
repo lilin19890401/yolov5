@@ -45,6 +45,7 @@ def get_latest_run(search_dir='.'):
     return max(last_list, key=os.path.getctime) if last_list else ''
 
 
+# 检测当前分支和git上面版本是否一致，如果版本落后则提醒用户
 def check_git_status():
     # Suggest 'git pull' if repo is out of date
     if platform.system() in ['Linux', 'Darwin'] and not os.path.isfile('/.dockerenv'):

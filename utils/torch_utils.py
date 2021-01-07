@@ -217,6 +217,8 @@ def load_classifier(name='resnet101', n=2):
     # input_range = [0, 1]
     # mean = [0.485, 0.456, 0.406]
     # std = [0.229, 0.224, 0.225]
+	# for x in [input_size, input_space, input_range, mean, std]:
+    #    print(x + ' =', eval(x))
 
     # Reshape output to n classes
     filters = model.fc.weight.shape[1]
