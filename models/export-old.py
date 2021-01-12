@@ -5,52 +5,27 @@ Usage:
 """
 
 import argparse
-import sys
-import time
-
-sys.path.append('./')  # to run '$ python *.py' files in subdirectories
 
 import torch
-import torch.nn as nn
 
-import models
-from models.experimental import attempt_load
-from utils.activations import Hardswish, SiLU
-from utils.general import set_logging, check_img_size
+from utils.google_utils import attempt_download
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', type=str, default='../runs/train/coco128/weights/best.pt', help='weights path')
-    parser.add_argument('--img_size', nargs='+', type=int, default=[640, 640], help='image size')
-    parser.add_argument('--batch_size', type=int, default=1, help='batch size')
+    parser.add_argument('--weights', type=str, default='./weights/yolov5l.pt', help='weights path')
+    parser.add_argument('--img-size', nargs='+', type=int, default=[640, 640], help='image size')
+    parser.add_argument('--batch-size', type=int, default=1, help='batch size')
     opt = parser.parse_args()
     opt.img_size *= 2 if len(opt.img_size) == 1 else 1  # expand
-    print('opt:{}'.format(opt))
-    set_logging()
-    t = time.time()
+    print(opt)
+
+    # Input
+    img = torch.zeros((opt.batch_size, 3, *opt.img_size))  # image size(1,3,320,192) iDetection
 
     # Load PyTorch model
-    model = attempt_load(opt.weights, map_location=torch.device('cpu'))  # load FP32 model
-    labels = model.names
-
-    # Checks
-    gs = int(max(model.stride))  # grid size (max stride)
-    opt.img_size = [check_img_size(x, gs) for x in opt.img_size]  # verify img_size are gs-multiples
-
-    print('opt:{}'.format(opt))
-    # Input
-    img = torch.zeros(opt.batch_size, 3, *opt.img_size)  # image size(1,3,320,192) iDetection
-
-    # Update model
-    for k, m in model.named_modules():
-        m._non_persistent_buffers_set = set()  # pytorch 1.6.0 compatibility
-        if isinstance(m, models.common.Conv):  # assign export-friendly activations
-            if isinstance(m.act, nn.Hardswish):
-                m.act = Hardswish()
-            elif isinstance(m.act, nn.SiLU):
-                m.act = SiLU()
-        # elif isinstance(m, models.yolo.Detect):
-        #     m.forward = m.forward_export  # assign forward (optional)
+    attempt_download(opt.weights)
+    model = torch.load(opt.weights, map_location=torch.device('cpu'))['model'].float()
+    model.eval()
     model.model[-1].export = True  # set Detect() layer export=True
     y = model(img)  # dry run
 
@@ -70,6 +45,7 @@ if __name__ == '__main__':
 
         print('\nStarting ONNX export with onnx %s...' % onnx.__version__)
         f = opt.weights.replace('.pt', '.onnx')  # filename
+        model.fuse()  # only for ONNX
         torch.onnx.export(model, img, f, verbose=False, opset_version=12, input_names=['images'],
                           output_names=['classes', 'boxes'] if y is None else ['output'])
 
@@ -87,7 +63,7 @@ if __name__ == '__main__':
 
         print('\nStarting CoreML export with coremltools %s...' % ct.__version__)
         # convert model from torchscript and apply pixel scaling as per detect.py
-        model = ct.convert(ts, inputs=[ct.ImageType(name='image', shape=img.shape, scale=1 / 255.0, bias=[0, 0, 0])])
+        model = ct.convert(ts, inputs=[ct.ImageType(name='images', shape=img.shape, scale=1 / 255.0, bias=[0, 0, 0])])
         f = opt.weights.replace('.pt', '.mlmodel')  # filename
         model.save(f)
         print('CoreML export success, saved as %s' % f)
@@ -95,4 +71,4 @@ if __name__ == '__main__':
         print('CoreML export failure: %s' % e)
 
     # Finish
-    print('\nExport complete (%.2fs). Visualize with https://github.com/lutzroeder/netron.' % (time.time() - t))
+    print('\nExport complete. Visualize with https://github.com/lutzroeder/netron.')

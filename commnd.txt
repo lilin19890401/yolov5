@@ -1,0 +1,8 @@
+C:\Anaconda3\envs\torch1.7.1\python train.py --img_size 640 --batch_size 8 --epochs 300 --data ./data/coco128.yaml --cfg ./models/yolov5s.yaml --weights ./weights/yolov5s.pt --name coco128
+C:\Anaconda3\envs\torch1.7.1\python models/export.py --weights runs/train/coco128/weights/best.pt --img_size 640 --batch_size 1  # export at 640x640 with batch size 1
+
+
+
+C:\Anaconda3\envs\torch1.7.1\python train.py --img_size 640 --batch_size 10 --epochs 200 --data ./data/SHWD.yaml --cfg ./models/yolov5s-SHWD.yaml --weights ./weights/yolov5s.pt --name SHWD 
+C:\Anaconda3\envs\torch1.7.1\python detect.py --img_size 640 --conf_thres 0.5 --iou_thres 0.45  --weights ./runs/train/SHWD/weights/best.pt --source r'D:\DeepLearning\ZData\SHWD\yolov5FormatTrainData\images\test' --name SHWD
+C:\Anaconda3\envs\torch1.7.1\python models/export.py --weights runs/train/SHWD/weights/best.pt --img_size 640 --batch_size 1  # export at 640x640 with batch size 1
