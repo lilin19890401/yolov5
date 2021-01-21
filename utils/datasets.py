@@ -381,81 +381,37 @@ def img2label_paths(img_paths):
 class LoadImagesAndLabels(Dataset):  # for training/testing
     def __init__(self, path, img_size=640, batch_size=16, augment=False, hyp=None, rect=False, image_weights=False,
                  cache_images=False, single_cls=False, stride=32, pad=0.0, prefix=''):
-        self.img_size = img_size
-        self.augment = augment
-        self.hyp = hyp
-        self.image_weights = image_weights
-        self.rect = False if image_weights else rect
-        self.mosaic = self.augment and not self.rect  # load 4 images at a time into a mosaic (only during training)
-		
-        # try:
-            # f = []  # image files
-            # for p in path if isinstance(path, list) else [path]:
-                # # 获取数据集路径path，包含图片路径的txt文件或者包含图片的文件夹路径
-                # # 使用pathlib.Path生成与操作系统无关的路径，因为不同操作系统路径的‘/’会有所不同
-                # p = str(Path(p))  # os-agnostic
-                # # 获取数据集路径的上级父目录，os.sep为路径里的破折号(不同系统路径破折号不同，os.sep根据系统自适应)
-                # parent = str(Path(p).parent) + os.sep
-                # # 如果路径path为包含图片路径的txt文件
-                # if os.path.isfile(p):  # file
-                    # with open(p, 'r') as t:
-                        # # 获取图片路径，更换相对路径
-                        # t = t.read().splitlines()
-                        # f += [x.replace('./', parent) if x.startswith('./') else x for x in t]  # local to global path
-                # # 如果路径path为包含图片的文件夹路径
-                # elif os.path.isdir(p):  # folder
-                    # f += glob.iglob(p + os.sep + '*.*')
-                # else:
-                    # raise Exception('%s does not exist' % p)
-            # # 破折号替换为os.sep，os.path.splitext(x)将文件名与扩展名分开并返回一个列表
-            # self.img_files = sorted(
-                # [x.replace('/', os.sep) for x in f if os.path.splitext(x)[-1].lower() in img_formats])
-        # except Exception as e:
-            # raise Exception('Error loading data from %s: %s\nSee %s' % (path, e, help_url))
-
-        # n = len(self.img_files)
-        # assert n > 0, 'No images found in %s. See %s' % (path, help_url)
-        # bi = np.floor(np.arange(n) / batch_size).astype(np.int)  # batch index
-        # nb = bi[-1] + 1  # number of batches
-
-        # self.n = n                                      # number of images
-        # self.batch = bi                                 # batch index of image
-        # self.img_size = img_size                        # 输入图片分辨率大小
-        # self.augment = augment                          # 数据增强
-        # self.hyp = hyp                                  # 超参数
-        # self.image_weights = image_weights              # 图片采样
-        # self.rect = False if image_weights else rect    # 矩形训练
-        # self.mosaic = self.augment and not self.rect    # load 4 images at a time into a mosaic (only during training)
-
+        self.img_size = img_size                        # 输入图片分辨率大小
+        self.augment = augment                          # 数据增强
+        self.hyp = hyp                                  # 超参数
+        self.image_weights = image_weights              # 图片采样来平衡权重
+        self.rect = False if image_weights else rect    # 图片采用时不能用矩形训练
+        self.mosaic = self.augment and not self.rect    # load 4 images at a time into a mosaic (only during training)
         self.mosaic_border = [-img_size // 2, -img_size // 2]
         self.stride = stride                            # 模型下采样的总步长
 
         try:
             f = []  # image files
             for p in path if isinstance(path, list) else [path]:
-				# 获取数据集路径path，包含图片路径的txt文件或者包含图片的文件夹路径
+                # 获取数据集路径path，包含图片路径的txt文件或者包含图片的文件夹路径
                 # 使用pathlib.Path生成与操作系统无关的路径，因为不同操作系统路径的‘/’会有所不同
                 p = Path(p)  # os-agnostic
                 if p.is_dir():  # dir
                     f += glob.glob(str(p / '**' / '*.*'), recursive=True)
                 elif p.is_file():  # file
                     with open(p, 'r') as t:
-						# 获取图片路径，更换相对路径
+                        # 获取图片路径，更换相对路径
                         t = t.read().strip().splitlines()
-						# 获取数据集路径的上级父目录，os.sep为路径里的破折号(不同系统路径破折号不同，os.sep根据系统自适应)
+                        # 获取数据集路径的上级父目录，os.sep为路径里的破折号(不同系统路径破折号不同，os.sep根据系统自适应)
                         parent = str(p.parent) + os.sep
                         f += [x.replace('./', parent) if x.startswith('./') else x for x in t]  # local to global path
                 else:
                     raise Exception('%s does not exist' % p)
-			# 破折号替换为os.sep，os.path.splitext(x)将文件名与扩展名分开并返回一个列表
+            # 破折号替换为os.sep，os.path.splitext(x)将文件名与扩展名分开并返回一个列表
             self.img_files = sorted([x.replace('/', os.sep) for x in f if x.split('.')[-1].lower() in img_formats])
             assert self.img_files, 'No images found'
         except Exception as e:
             raise Exception('Error loading data from %s: %s\nSee %s' % (path, e, help_url))
-
-        # Define labels
-        # 获取数据集的标签
-        #self.label_files = [x.replace('images', 'labels').replace(os.path.splitext(x)[-1], '.txt') for x in self.img_files]
 
 
         # Check cache
@@ -469,6 +425,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
             cache = self.cache_labels(cache_path)  # cache
 
         # Display cache
+        # 找到的标签数量，漏掉的标签数量，空的标签数量，错误的标签数量，总的标签数量
         [nf, nm, ne, nc, n] = cache.pop('results')  # found, missing, empty, corrupted, total
         desc = f"Scanning '{cache_path}' for images and labels... {nf} found, {nm} missing, {ne} empty, {nc} corrupted"
         tqdm(None, desc=desc, total=n, initial=n)
@@ -485,10 +442,10 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
             for x in self.labels:
                 x[:, 0] = 0
 
-        n = len(shapes)  # number of images
-        bi = np.floor(np.arange(n) / batch_size).astype(np.int)  # batch index
-        nb = bi[-1] + 1  # number of batches
-        self.batch = bi  # batch index of image
+        n = len(shapes)                                             # number of images
+        bi = np.floor(np.arange(n) / batch_size).astype(np.int)     # batch index
+        nb = bi[-1] + 1                                             # number of batches
+        self.batch = bi                                             # batch index of image
         self.n = n
         self.indices = range(n)
 
@@ -520,74 +477,6 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
             self.batch_shapes = np.ceil(np.array(shapes) * img_size / stride + pad).astype(np.int) * stride
 
-        # # Cache labels
-        # # 设置是否创建数据子集、提取目标检测框做再次分类，labels是否已加载
-        # create_datasubset, extract_bounding_boxes, labels_loaded = False, False, False
-        # # 漏掉的标签数量，找到的标签数量，空的标签数量，数据子集的数量，相同的标签数量
-        # nm, nf, ne, ns, nd = 0, 0, 0, 0, 0  # number missing, found, empty, datasubset, duplicate
-        # pbar = enumerate(self.label_files)
-        # if rank in [-1, 0]:
-            # pbar = tqdm(pbar)
-        # for i, file in pbar:
-            # l = self.labels[i]  # label
-            # # 读取标签txt文件，读取失败则ne+1，标签格式为：class x y w h
-            # if l is not None and l.shape[0]:
-                # assert l.shape[1] == 5, '> 5 label columns: %s' % file          # 判断标签是否有五列
-                # assert (l >= 0).all(), 'negative labels: %s' % file             # 判断标签是否全部>=0
-                # assert (l[:, 1:] <= 1).all(), 'non-normalized or out of bounds coordinate labels: %s' % file    # 判断标签坐标x y w h是否归一化
-                # if np.unique(l, axis=0).shape[0] < l.shape[0]:  # duplicate rows                                # 找出标签中重复的坐标
-                    # nd += 1  # print('WARNING: duplicate rows in %s' % self.label_files[i])  # duplicate rows
-                # if single_cls:                                                                                  # 如果数据集只有一个类，设置类别标签为0
-                    # l[:, 0] = 0  # force dataset into single-class mode
-                # self.labels[i] = l
-                # nf += 1  # file found
-
-                # # Create subdataset (a smaller dataset)
-                # # 创建一个数据子集(默认不调用)
-                # if create_datasubset and ns < 1E4:
-                    # if ns == 0:
-                        # create_folder(path='./datasubset')
-                        # os.makedirs('./datasubset/images')
-                    # exclude_classes = 43
-                    # # 保存图片路径到本地
-                    # if exclude_classes not in l[:, 0]:
-                        # ns += 1
-                        # # shutil.copy(src=self.img_files[i], dst='./datasubset/images/')  # copy image
-                        # with open('./datasubset/images.txt', 'a') as f:
-                            # f.write(self.img_files[i] + '\n')
-
-                # # Extract object detection boxes for a second stage classifier
-                # # 获取目标框与图片，并将框从图片截取下来保存到本地(默认不使用)
-                # if extract_bounding_boxes:
-                    # p = Path(self.img_files[i])
-                    # img = cv2.imread(str(p))
-                    # h, w = img.shape[:2]
-                    # for j, x in enumerate(l):
-                        # f = '%s%sclassifier%s%g_%g_%s' % (p.parent.parent, os.sep, os.sep, x[0], j, p.name)
-                        # if not os.path.exists(Path(f).parent):
-                            # os.makedirs(Path(f).parent)  # make new output folder
-
-                        # # 对归一化的坐标乘以w，h
-                        # b = x[1:] * [w, h, w, h]  # box
-                        # b[2:] = b[2:].max()  # rectangle to square
-                        # b[2:] = b[2:] * 1.3 + 30  # pad
-                        # b = xywh2xyxy(b.reshape(-1, 4)).ravel().astype(np.int)
-                        # # 修正图片外的框
-                        # b[[0, 2]] = np.clip(b[[0, 2]], 0, w)  # clip boxes outside of image
-                        # b[[1, 3]] = np.clip(b[[1, 3]], 0, h)
-                        # assert cv2.imwrite(f, img[b[1]:b[3], b[0]:b[2]]), 'Failure extracting classifier boxes'
-            # else:
-                # ne += 1  # print('empty labels for image %s' % self.img_files[i])  # file empty
-                # # os.system("rm '%s' '%s'" % (self.img_files[i], self.label_files[i]))  # remove
-
-            # # 显示信息
-            # if rank in [-1, 0]:
-                # pbar.desc = 'Scanning labels %s (%g found, %g missing, %g empty, %g duplicate, for %g images)' % (
-                    # cache_path, nf, nm, ne, nd, n)
-        # if nf == 0:
-            # s = 'WARNING: No labels found in %s. See %s' % (os.path.dirname(file) + os.sep, help_url)
-            # print(s)
-            # assert not augment, '%s. Can not train without labels.' % s
 
         # Cache images into memory for faster training (WARNING: large datasets may exceed system RAM)
         self.imgs = [None] * n
@@ -605,7 +494,10 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
     def cache_labels(self, path=Path('./labels.cache')):
         # Cache dataset labels, check images and read shapes
         x = {}  # dict
+        # 漏掉的标签数量，找到的标签数量，空的标签数量，重复的标签数量
         nm, nf, ne, nc = 0, 0, 0, 0  # number missing, found, empty, duplicate
+        # 设置是否创建数据子集、提取目标检测框做再次分类，labels是否已加载
+        # create_datasubset, extract_bounding_boxes, ns = False, False, 0
         pbar = tqdm(zip(self.img_files, self.label_files), desc='Scanning images', total=len(self.img_files))
         for i, (im_file, lb_file) in enumerate(pbar):
             try:
@@ -613,21 +505,56 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 im = Image.open(im_file)
                 im.verify()  # PIL verify
                 shape = exif_size(im)  # image size
-                assert (shape[0] > 9) & (shape[1] > 9), 'image size <10 pixels'
+                assert (shape[0] > 9) & (shape[1] > 9), 'image size < 10 pixels'
 
                 # verify labels
                 if os.path.isfile(lb_file):
                     nf += 1  # label found
                     with open(lb_file, 'r') as f:
-                        l = np.array([x.split() for x in f.read().strip().splitlines()], dtype=np.float32)  # labels
+                        l = np.array([x.split() for x in f.read().strip().splitlines()], dtype=np.float32)  # labels   格式为：class x y w h
                     if len(l):
-                        assert l.shape[1] == 5, 'labels require 5 columns each'
-                        assert (l >= 0).all(), 'negative labels'
-                        assert (l[:, 1:] <= 1).all(), 'non-normalized or out of bounds coordinate labels'
-                        assert np.unique(l, axis=0).shape[0] == l.shape[0], 'duplicate labels'
+                        assert l.shape[1] == 5, 'labels require 5 columns each'         # 判断标签是否有五列
+                        assert (l >= 0).all(), 'negative labels'                        # 判断标签是否全部>=0
+                        assert (l[:, 1:] <= 1).all(), 'non-normalized or out of bounds coordinate labels'   # 判断标签坐标x y w h是否归一化
+                        assert np.unique(l, axis=0).shape[0] == l.shape[0], 'duplicate labels'              # 找出标签中重复的坐标
                     else:
+                        # print('empty labels for image %s' % im_file)
                         ne += 1  # label empty
                         l = np.zeros((0, 5), dtype=np.float32)
+                        # os.system("rm '%s' '%s'" % (im_file, lb_file))  # remove
+
+                    # # Create subdataset (a smaller dataset)
+                    # # 创建一个数据子集(默认不调用)
+                    # if create_datasubset:
+                        # if ns == 0:
+                            # create_folder(path='./datasubset')
+                            # os.makedirs('./datasubset/images')
+                        # exclude_classes = 43
+                        # # 保存图片路径到本地
+                        # if exclude_classes not in l[:, 0]:
+                            # ns += 1
+                            # # shutil.copy(src=self.img_files[i], dst='./datasubset/images/')  # copy image
+                            # with open('./datasubset/images.txt', 'a') as f:
+                                # f.write(self.img_files[i] + '\n')
+                    # # Extract object detection boxes for a second stage classifier
+                    # # 获取目标框与图片，并将框从图片截取下来保存到本地(默认不使用)
+                    # if extract_bounding_boxes:
+                        # p = Path(self.img_files[i])
+                        # img = cv2.imread(str(p))
+                        # h, w = img.shape[:2]
+                        # for j, x in enumerate(l):
+                            # f = '%s%sclassifier%s%g_%g_%s' % (p.parent.parent, os.sep, os.sep, x[0], j, p.name)
+                            # if not os.path.exists(Path(f).parent):
+                                # os.makedirs(Path(f).parent)  # make new output folder
+                        # # 对归一化的坐标乘以w，h
+                        # b = x[1:] * [w, h, w, h]  # box
+                        # b[2:] = b[2:].max()  # rectangle to square
+                        # b[2:] = b[2:] * 1.3 + 30  # pad
+                        # b = xywh2xyxy(b.reshape(-1, 4)).ravel().astype(np.int)
+                        # # 修正图片外的框
+                        # b[[0, 2]] = np.clip(b[[0, 2]], 0, w)  # clip boxes outside of image
+                        # b[[1, 3]] = np.clip(b[[1, 3]], 0, h)
+                        # assert cv2.imwrite(f, img[b[1]:b[3], b[0]:b[2]]), 'Failure extracting classifier boxes'
                 else:
                     nm += 1  # label missing
                     l = np.zeros((0, 5), dtype=np.float32)
