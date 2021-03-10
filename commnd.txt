@@ -7,3 +7,5 @@ C:\Anaconda3\envs\torch1.7.1\python train.py --img_size 640 --batch_size 10 --ep
 C:\Anaconda3\envs\torch1.7.1\python detect.py --img_size 640 --conf_thres 0.5 --iou_thres 0.45  --weights ./runs/train/SHWD/weights/best.pt --source D:/DeepLearning/ZData/SHWD/yolov5FormatTrainData/images/test --name SHWD
 C:\Anaconda3\envs\torch1.7.1\python models/export.py --weights runs/train/SHWD/weights/best.pt --img_size 640 --batch_size 1  # export at 640x640 with batch size 1
 C:\Anaconda3\envs\torch1.7.1\python gen_wts.py --weights runs/train/SHWD/weights/best.pt --savewts runs/train/SHWD/weights/yolov5s_shwd.wts
+C:\Anaconda3\envs\torch1.7.1\python train.py --resume		# resuming an interrupted training with the latest training model
+C:\Anaconda3\envs\torch1.7.1\python train.py --resume path/to/last.pt  # resuming an interrupted training with specify resume checkpoint
