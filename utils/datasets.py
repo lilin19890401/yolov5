@@ -35,6 +35,7 @@ for orientation in ExifTags.TAGS.keys():
         break
 
 
+
 def get_hash(files):
     # Returns a single hash value of a list of files
     return sum(os.path.getsize(f) for f in files if os.path.isfile(f))
@@ -506,12 +507,18 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 im.verify()  # PIL verify
                 shape = exif_size(im)  # image size
                 assert (shape[0] > 9) & (shape[1] > 9), 'image size < 10 pixels'
+                assert im.format.lower() in img_formats, 'invalid image format {im.format}'
 
                 # verify labels
                 if os.path.isfile(lb_file):
                     nf += 1  # label found
                     with open(lb_file, 'r') as f:
-                        l = np.array([x.split() for x in f.read().strip().splitlines()], dtype=np.float32)  # labels   格式为：class x y w h
+                        l = [x.split() for x in f.read().strip().splitlines()]
+                        if any([len(x) > 8 for x in l]):  # is segment
+                            classes = np.array([x[0] for x in l], dtype=np.float32)
+                            segments = [np.array(x[1:], dtype=np.float32).reshape(-1, 2) for x in l]    # (cls, xy1...)
+                            l = np.concatenate((classes.reshape(-1, 1), segments2boxes(segments)), 1)   # (cls, xywh)
+                        l = np.array(l, dtype=np.float32)                                               # labels   格式为：class x y w h
                     if len(l):
                         assert l.shape[1] == 5, 'labels require 5 columns each'         # 判断标签是否有五列
                         assert (l >= 0).all(), 'negative labels'                        # 判断标签是否全部>=0
@@ -966,7 +973,6 @@ def letterbox(img, new_shape=(640, 640), color=(114, 114, 114), auto=True, scale
         dw, dh = np.mod(dw, 32), np.mod(dh, 32)  # wh padding
 
     # 如果scaleFill=True,则不进行填充，直接resize成img_size,任由图片进行拉伸和压缩
-
     elif scaleFill:  # stretch
         dw, dh = 0.0, 0.0
         new_unpad = (new_shape[1], new_shape[0])

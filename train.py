@@ -39,30 +39,37 @@ os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
 logger = logging.getLogger(__name__)
 # Hyperparameters   可以参考hyp.finetune.yaml   hyp.scratch.yaml
-hyp = {'lr0': 0.01,             # initial learning rate (SGD=1E-2, Adam=1E-3)
-       'lrf': 0.114,            # 余弦退火超参数
-       'momentum': 0.937,       # SGD momentum/Adam beta1
-       'weight_decay': 5e-4,    # optimizer weight decay
-       'giou': 0.05,            # GIoU loss gain
-       'cls': 0.5,              # cls loss gain                     分类损失的系数
-       'cls_pw': 1.0,           # cls BCELoss positive_weight       分类BCELoss中正样本的权重
-       'obj': 1.0,              # obj loss gain (scale with pixels) 有无物体损失的系数
-       'obj_pw': 1.0,           # obj BCELoss positive_weight       分类BCELoss中正样本的权重
-       'iou_t': 0.20,           # IoU training threshold            标签与anchors的iou阈值
-       'anchor_t': 4.0,         # anchor-multiple threshold         标签的长h宽w/anchor的长h_a宽w_a阈值, 即h/h_a, w/w_a都要在(1/2.26, 2.26)之间anchor-multiple threshold
-       'fl_gamma': 0.0,         # focal loss gamma (efficientDet default gamma=1.5)    设为0则表示不使用focal loss
-       # 下面是一些数据增强的系数, 包括颜色空间和图片空间
-       'hsv_h': 0.015,          # image HSV-Hue augmentation (fraction)
-       'hsv_s': 0.7,            # image HSV-Saturation augmentation (fraction)
-       'hsv_v': 0.4,            # image HSV-Value augmentation (fraction)
-       'degrees': 0.0,          # image rotation (+/- deg)                      旋转角度
-       'translate': 0.5,        # image translation (+/- fraction)              水平和垂直平移
-       'scale': 0.5,            # image scale (+/- gain)                        缩放
-       'shear': 0.0,            # image shear (+/- deg)                         剪切
-       'perspective': 0.0,      # image perspective (+/- fraction), range 0-0.001
-       'flipud': 0.0,           # image flip up-down (probability)
-       'fliplr': 0.5,           # image flip left-right (probability)
-       'mixup': 0.0}            # image mixup (probability)                     mixup系数
+hyp = { 'lr0': 0.01,                # initial learning rate (SGD=1E-2, Adam=1E-3)
+        'lrf': 0.2,                 # 余弦退火超参数 final OneCycleLR learning rate (lr0 * lrf)
+        'momentum': 0.937,          # SGD momentum/Adam beta1
+        'weight_decay': 5e-4,       # optimizer weight decay   5e-4
+        'warmup_epochs': 3.0,       # warmup epochs (fractions ok)
+        'warmup_momentum': 0.8,     #  warmup initial momentum
+        'warmup_bias_lr': 0.1,      # warmup initial bias lr
+        'box': 0.05,                # box loss gain
+        #'giou': 0.05,              # GIoU loss gain
+        'cls': 0.5,                 # cls loss gain                     分类损失的系数
+        'cls_pw': 1.0,              # cls BCELoss positive_weight       分类BCELoss中正样本的权重
+        'obj': 1.0,                 # obj loss gain (scale with pixels) 有无物体损失的系数
+        'obj_pw': 1.0,              # obj BCELoss positive_weight       分类BCELoss中正样本的权重
+        'iou_t': 0.20,              # IoU training threshold            标签与anchors的iou阈值
+        'anchor_t': 4.0,            # anchor-multiple threshold         标签的长h宽w/anchor的长h_a宽w_a阈值, 即h/h_a, w/w_a都要在(1/2.26, 2.26)之间anchor-multiple threshold
+        # anchors: 3                # anchors per output layer (0 to ignore)
+        'fl_gamma': 0.0,            # focal loss gamma (efficientDet default gamma=1.5)    设为0则表示不使用focal loss
+        # 下面是一些数据增强的系数, 包括颜色空间和图片空间
+        'fl_gamma': 0.0,            # focal loss gamma (efficientDet default gamma=1.5)
+        'hsv_h': 0.015,             # image HSV-Hue augmentation (fraction)
+        'hsv_s': 0.7,               # image HSV-Saturation augmentation (fraction)
+        'hsv_v': 0.4,               # image HSV-Value augmentation (fraction)
+        'degrees': 0.0,             # image rotation (+/- deg)                      旋转角度
+        'translate': 0.1,           # image translation (+/- fraction)              水平和垂直平移
+        'scale': 0.5,               # image scale (+/- gain)                        缩放
+        'shear': 0.0,               # image shear (+/- deg)                         剪切
+        'perspective': 0.0,         # image perspective (+/- fraction), range 0-0.001
+        'flipud': 0.0,              # image flip up-down (probability)
+        'fliplr': 0.5,              # image flip left-right (probability)
+        'mosaic': 1.0,              # image mosaic (probability)
+        'mixup': 0.0}               # image mixup (probability)                     mixup系数
 
 try:
     import wandb
@@ -129,8 +136,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
             ckpt['model'].yaml['anchors'] = round(hyp['anchors'])  # force autoanchor
         """
         这里模型创建，可通过opt.cfg，也可通过ckpt['model'].yaml
-        这里的区别在于是否是resume，resume时会将opt.cfg设为空，
-        则按照ckpt['model'].yaml创建模型；
+        这里的区别在于是否是resume，resume时会将opt.cfg设为空，则按照ckpt['model'].yaml创建模型
         这也影响着下面是否除去anchor的key(也就是不加载anchor)，如果resume则不加载anchor
         主要是因为保存的模型会保存anchors，有时候用户自定义了anchor之后，再resume，则原来基于coco数据集的anchor就会覆盖自己设定的anchor，
         参考https://github.com/ultralytics/yolov5/issues/459
@@ -218,6 +224,11 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                                id=ckpt.get('wandb_id') if 'ckpt' in locals() else None)
     loggers = {'wandb': wandb}  # loggers dict
 
+    # EMA
+    # 在深度学习中，经常会使用EMA（指数移动平均）这个方法对模型的参数做滑动平均，以求提高测试指标并增加模型鲁棒，如果GPU进程数大于1,则不创建
+    # Exponential moving average
+    ema = ModelEMA(model) if rank in [-1, 0] else None
+
     # Resume
     # best_fitness是以[0.0, 0.0, 0.1, 0.9]为系数并乘以[精确度, 召回率, mAP@0.5, mAP@0.5:0.95]再求和所得
     # 根据best_fitness来保存best.pt
@@ -228,6 +239,11 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
         if ckpt['optimizer'] is not None:
             optimizer.load_state_dict(ckpt['optimizer'])
             best_fitness = ckpt['best_fitness']
+
+        # EMA
+        if ema and ckpt.get('ema'):
+            ema.ema.load_state_dict(ckpt['ema'].float().state_dict())
+            ema.updates = ckpt['updates']
 
         # Results
         # 加载训练结果result.txt
@@ -275,11 +291,6 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
     if opt.sync_bn and cuda and rank != -1:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
         logger.info('Using SyncBatchNorm()')
-
-    # EMA
-    # 在深度学习中，经常会使用EMA（指数移动平均）这个方法对模型的参数做滑动平均，以求提高测试指标并增加模型鲁棒，如果GPU进程数大于1,则不创建
-    # Exponential moving average
-    ema = ModelEMA(model) if rank in [-1, 0] else None
 
     # DDP mode
     # 如果rank不等于-1,则使用DistributedDataParallel模式
@@ -626,22 +637,22 @@ if __name__ == '__main__':
     opt参数解析：
     cfg:模型配置文件，网络结构
     data:数据集配置文件，数据集路径，类名等
-    hyp:超参数文件
+    hyp:超参数文件;对于小尺寸数据，可以更改hyp中optimizer为Adam,并修改配套参数为作者预设的Adam参数
     epochs:训练总轮次
     batch-size:批次大小
     img-size:输入图片分辨率大小
-    rect:是否采用矩形训练，默认False
+    rect:是否采用矩形训练，默认False;输入这个参数，会关闭Mosaic数据增强
     resume:接着打断训练上次的结果接着训练
-    nosave:不保存模型，默认False
-    notest:不进行test，默认False
-    noautoanchor:不自动调整anchor，默认False
+    nosave:不保存模型，默认False;输入这个参数将存储最后的checkpoint,可以加快整体训练速度，但建议关闭这个参数，这样能保留best.pt
+    notest:不进行test，默认False;只测试最后一个epoch，能加快整体训练速度
+    noautoanchor:不自动调整anchor，默认False;关闭自适应自适应锚定框，yolov5会自动给分析当前锚定框的Best Possible Recall(BPR),对于img-size 640,最佳BPR为0.99,随着img-size降低,BPR也随着变差
     evolve:是否进行超参数进化，默认False
     bucket:谷歌云盘bucket，一般不会用到
-    cache-images:是否提前缓存图片到内存，以加快训练速度，默认False
-    weights:加载的权重文件
+    cache-images:将预处理后的训练数据全部存储在RAM中，以加快训练速度，默认False;
+    weights:加载的预训练权重文件
     name:数据集名字，如果设置：results.txt to results_name.txt，默认无
     device:训练的设备，cpu；0(表示一个gpu设备cuda:0)；0,1,2,3(多个gpu设备)
-    multi-scale:是否进行多尺度训练，默认False
+    multi-scale:是否进行多尺度训练，默认False;在训练过程中，输入图像会自动resize至img-size +/- 50%,能一定程度上防止模型过拟合，但对GPU显存要求高
     single-cls:数据集是否只有一个类别，默认False
     adam:是否使用adam优化器
     sync-bn:是否使用跨卡同步BN,在DDP模式使用
@@ -683,7 +694,7 @@ if __name__ == '__main__':
 
     # Set DDP variables
     """
-        设置DDP模式的参数
+        设置DDP模式的参数      DistributedDataParallel
         world_size:表示全局进程个数
         global_rank:进程编号
     """

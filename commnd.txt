@@ -9,3 +9,6 @@ C:\Anaconda3\envs\torch1.7.1\python models/export.py --weights runs/train/SHWD/w
 C:\Anaconda3\envs\torch1.7.1\python gen_wts.py --weights runs/train/SHWD/weights/best.pt --savewts runs/train/SHWD/weights/yolov5s_shwd.wts
 C:\Anaconda3\envs\torch1.7.1\python train.py --resume		# resuming an interrupted training with the latest training model
 C:\Anaconda3\envs\torch1.7.1\python train.py --resume path/to/last.pt  # resuming an interrupted training with specify resume checkpoint
+
+
+C:\Anaconda3\envs\torch1.7.1\python train.py --img_size 640 --batch_size 10 --epochs 200 --data ./data/nonPCCharRegion.yaml --cfg ./models/yolov5s-nonPCCharRegion_640_640.yaml --weights ./weights/yolov5s.pt --name nonPCCharRegion_640_640 
